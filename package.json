@@ -1,0 +1,45 @@
+{
+  "name": "@ton-gasless/w5-relayer",
+  "version": "1.0.0",
+  "description": "Open-source, non-custodial W5 Gasless Relayer Server and Telegram Mini App SDK for The Open Network (TON)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "tsx --test test/**/*.test.ts",
+    "simulate": "tsx examples/testnet-simulate.ts",
+    "demo": "tsx examples/telegram-mini-app-demo.ts"
+  },
+  "keywords": [
+    "ton",
+    "blockchain",
+    "w5",
+    "wallet-v5",
+    "gasless",
+    "relayer",
+    "telegram-mini-app",
+    "sdk",
+    "account-abstraction"
+  ],
+  "author": "TON Infrastructure Architects",
+  "license": "MIT",
+  "dependencies": {
+    "@ton/core": "^0.59.0",
+    "@ton/crypto": "^3.3.0",
+    "@ton/ton": "^14.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.13.8",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}
