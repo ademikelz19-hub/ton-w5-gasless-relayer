@@ -5,6 +5,7 @@ import {
   internal,
   SendMode,
   Cell,
+  Transaction,
 } from '@ton/core';
 import { mnemonicToPrivateKey, KeyPair } from '@ton/crypto';
 import { TonClient, WalletContractV4, WalletContractV5R1 } from '@ton/ton';
@@ -16,6 +17,14 @@ export interface BroadcasterConfig {
   apiKey?: string;
   mnemonic?: string;
   gasSponsorshipTon: number;
+}
+
+export interface BroadcastResult {
+  txHash: string;
+  logicalTime?: string;
+  gasSponsoredTon: string;
+  simulated: boolean;
+  confirmed: boolean;
 }
 
 export class RelayBroadcaster {
@@ -92,14 +101,55 @@ export class RelayBroadcaster {
   }
 
   /**
+   * Polls the TON network until the contract sequence number advances,
+   * then returns the real on-chain transaction hash and logical time.
+   */
+  public async waitForConfirmation(
+    targetAddress: Address,
+    initialSeqno: number,
+    timeoutMs: number = config.CONFIRMATION_TIMEOUT_MS
+  ): Promise<{ txHash: string; logicalTime: string }> {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 2000));
+
+      try {
+        const state = await this.client.getContractState(targetAddress);
+        if (state.state !== 'active') continue;
+
+        const res = await this.client.runMethod(targetAddress, 'seqno');
+        const currentSeqno = res.stack.readNumber();
+
+        if (currentSeqno > initialSeqno) {
+          // Contract executed and seqno incremented! Retrieve latest on-chain transaction
+          const txs = await this.client.getTransactions(targetAddress, { limit: 3 });
+          if (txs && txs.length > 0) {
+            const latestTx = txs[0];
+            return {
+              txHash: latestTx.hash().toString('hex'),
+              logicalTime: latestTx.lt.toString(),
+            };
+          }
+        }
+      } catch {
+        // Continue polling until timeout
+      }
+    }
+
+    throw new Error(`Transaction confirmation timed out after ${timeoutMs / 1000} seconds`);
+  }
+
+  /**
    * Construct an internal transaction forwarding the verified W5 payload with relayer-sponsored gas.
-   * Then broadcast to TON Testnet.
+   * Then broadcast to TON Testnet / Mainnet.
    */
   public async broadcastW5Internal(
     userWalletAddress: string,
     parsedPayload: W5ParsedPayload,
-    gasAmountTon: number = config.MAX_GAS_PER_TX_TON
-  ): Promise<{ txHash: string; gasSponsoredTon: string; simulated: boolean }> {
+    gasAmountTon: number = config.MAX_GAS_PER_TX_TON,
+    shouldWaitConfirmation: boolean = config.WAIT_FOR_CONFIRMATION
+  ): Promise<BroadcastResult> {
     await this.init();
 
     const targetUserAddress = Address.parse(userWalletAddress);
@@ -112,6 +162,7 @@ export class RelayBroadcaster {
         txHash: mockHash,
         gasSponsoredTon: gasAmountTon.toFixed(4),
         simulated: true,
+        confirmed: true,
       };
     }
 
@@ -124,7 +175,7 @@ export class RelayBroadcaster {
       );
     }
 
-    // Open contract instance to query seqno
+    // Open contract instance to query relayer seqno
     const contract = this.client.open(this.relayerWallet);
     const relayerSeqno = await contract.getSeqno();
 
@@ -144,14 +195,34 @@ export class RelayBroadcaster {
       messages: [internalMsg],
     });
 
-    // Broadcast to TON Testnet
+    // Broadcast to TON network
     await this.client.sendExternalMessage(this.relayerWallet, transfer);
-    const txHash = transfer.hash().toString('hex');
+    const pendingMsgHash = transfer.hash().toString('hex');
+
+    // Optional confirmation wait
+    if (shouldWaitConfirmation) {
+      try {
+        const confirmedTx = await this.waitForConfirmation(
+          targetUserAddress,
+          parsedPayload.seqno
+        );
+        return {
+          txHash: confirmedTx.txHash,
+          logicalTime: confirmedTx.logicalTime,
+          gasSponsoredTon: gasAmountTon.toFixed(4),
+          simulated: false,
+          confirmed: true,
+        };
+      } catch (err: any) {
+        console.warn('Confirmation polling timed out, returning broadcast envelope hash:', err.message);
+      }
+    }
 
     return {
-      txHash,
+      txHash: pendingMsgHash,
       gasSponsoredTon: gasAmountTon.toFixed(4),
       simulated: false,
+      confirmed: false,
     };
   }
 }

@@ -1,3 +1,5 @@
+import { beginCell } from '@ton/core';
+
 /**
  * TON Wallet V5 (W5R1) Specification Constants & OpCodes
  */
@@ -16,6 +18,10 @@ export const NETWORK_GLOBAL_IDS = {
   TESTNET: -3,
 } as const;
 
+export function getNetworkGlobalId(network: 'mainnet' | 'testnet'): number {
+  return network === 'mainnet' ? NETWORK_GLOBAL_IDS.MAINNET : NETWORK_GLOBAL_IDS.TESTNET;
+}
+
 export const W5_DEFAULTS = {
   WORKCHAIN: 0,
   SUBWALLET_NUMBER: 0,
@@ -28,3 +34,45 @@ export const W5_DEFAULTS = {
   SEQNO_BITS: 32,
   MAX_ACTIONS_COUNT: 255,
 } as const;
+
+export interface DecodedWalletIdV5R1 {
+  networkGlobalId: number;
+  workChain: number;
+  subwalletNumber: number;
+  walletVersion: string;
+}
+
+/**
+ * Decodes a 32-bit serialized W5 wallet ID without hardcoding subwallet numbers.
+ */
+export function decodeWalletIdV5R1(
+  walletIdRaw: number,
+  networkGlobalId: number = NETWORK_GLOBAL_IDS.TESTNET
+): DecodedWalletIdV5R1 {
+  try {
+    const context = BigInt(walletIdRaw) ^ BigInt(networkGlobalId);
+    const bitReader = beginCell().storeInt(context, 32).endCell().beginParse();
+    const isClientContext = bitReader.loadUint(1);
+
+    if (isClientContext === 1) {
+      const workChain = bitReader.loadInt(8);
+      const _version = bitReader.loadUint(8);
+      const subwalletNumber = bitReader.loadUint(15);
+      return {
+        networkGlobalId,
+        workChain,
+        subwalletNumber,
+        walletVersion: 'v5r1',
+      };
+    }
+  } catch {
+    // fallback
+  }
+
+  return {
+    networkGlobalId,
+    workChain: 0,
+    subwalletNumber: 0,
+    walletVersion: 'v5r1',
+  };
+}

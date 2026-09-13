@@ -12,9 +12,11 @@ import { WalletContractV5R1 } from '@ton/ton';
 import {
   BuildGaslessTransferArgs,
   JettonTransferConfig,
+  RelayerFeePayment,
   SignerFn,
 } from './types.js';
 import { SignatureVerifier } from '../engine/verifier.js';
+import { getNetworkGlobalId } from '../engine/w5-spec.js';
 
 export class W5PayloadBuilder {
   /**
@@ -83,11 +85,13 @@ export class W5PayloadBuilder {
   } {
     const pubKeyBuf = SignatureVerifier.normalizePublicKey(args.publicKey);
     const subwalletNumber = args.subwalletNumber ?? 0;
+    const network = args.network || 'testnet';
+    const networkGlobalId = getNetworkGlobalId(network);
 
     const wallet = WalletContractV5R1.create({
       publicKey: pubKeyBuf,
       walletId: {
-        networkGlobalId: -3, // Testnet
+        networkGlobalId,
         context: {
           workChain: 0,
           walletVersion: 'v5r1',
@@ -118,7 +122,7 @@ export class W5PayloadBuilder {
       );
     }
 
-    // 2. Jetton transfer if provided
+    // 2. Primary Jetton transfer if provided
     if (args.jettonTransfer) {
       const jettonMsg = this.createJettonTransferMessage(
         args.jettonTransfer,
@@ -127,13 +131,27 @@ export class W5PayloadBuilder {
       messages.push(jettonMsg);
     }
 
-    // 3. Custom messages if provided
+    // 3. Relayer Fee Recovery Jetton transfer if configured
+    if (args.relayerFee) {
+      const feeMsg = this.createJettonTransferMessage(
+        {
+          jettonWalletAddress: args.relayerFee.feeJettonWallet,
+          recipient: args.relayerFee.feeRecipient,
+          jettonAmount: args.relayerFee.feeAmount,
+          comment: args.relayerFee.comment || 'Relayer Gas Fee',
+        },
+        wallet.address
+      );
+      messages.push(feeMsg);
+    }
+
+    // 4. Custom messages if provided
     if (args.messages && args.messages.length > 0) {
       messages.push(...args.messages);
     }
 
     if (messages.length === 0) {
-      throw new Error('At least one action or transfer message must be specified');
+      throw new Error('At least one action, transfer, or fee message must be specified');
     }
 
     const validUntil = args.validUntil ?? Math.floor(Date.now() / 1000) + 180;
@@ -196,9 +214,11 @@ export class W5PayloadBuilder {
     signer: Buffer | SignerFn
   ): Promise<{ walletAddress: string; payloadBoc: string; payloadCell: Cell; validUntil: number }> {
     const validUntil = args.validUntil ?? Math.floor(Date.now() / 1000) + 180;
+    const network = args.network || 'testnet';
     const { wallet, signingHash, finalizeWithSignature } = this.buildUnsignedPayload({
       ...args,
       validUntil,
+      network,
     });
 
     let signature: Buffer;
@@ -211,7 +231,7 @@ export class W5PayloadBuilder {
     const { payloadCell, payloadBoc } = finalizeWithSignature(signature);
 
     return {
-      walletAddress: wallet.address.toString({ testOnly: true }),
+      walletAddress: wallet.address.toString({ testOnly: network === 'testnet' }),
       payloadBoc,
       payloadCell,
       validUntil,

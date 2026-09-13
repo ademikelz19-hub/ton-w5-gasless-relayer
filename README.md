@@ -2,31 +2,40 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
 [![TON](https://img.shields.io/badge/TON-Wallet--V5R1-0088cc.svg)](https://docs.ton.org)
+[![Networks](https://img.shields.io/badge/Networks-Mainnet%20%7C%20Testnet-green.svg)](https://docs.ton.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/Tests-12%20Passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-16%20Passing-brightgreen.svg)]()
 
-An open-source, non-custodial **Gasless Relayer Engine** and **Telegram Mini App SDK** for The Open Network (TON). 
+An enterprise-grade, open-source, non-custodial **Gasless Relayer Engine** and **Telegram Mini App SDK** for The Open Network (TON). 
 
-Built specifically to operationalize the **TON Wallet V5 (W5R1)** standard, this infrastructure enables Telegram Mini Apps and Web3 games to offer **true zero-gas user onboarding**—enabling users to send Jettons (such as USDT) or interact with smart contracts without possessing native Toncoin (TON) for gas fees.
+Built specifically to operationalize the **TON Wallet V5 (W5R1)** standard, this infrastructure allows Telegram Mini Apps and Web3 games to provide **true zero-gas user onboarding**—enabling users to send Jettons (such as USDT) or interact with smart contracts without possessing native Toncoin (TON) for gas fees.
 
 ---
 
-## 🌟 The Problem: The Gas Friction in Telegram Onboarding
+## 🌟 The Problem: The Gas Dilemma for 1 Billion Telegram Users
 
 While Telegram Mini Apps have driven massive wallet creation (over 40M+ wallets), a systemic adoption bottleneck persists:
 
 > **The Zero-TON Paradox**: A new user who receives USDT or an in-game Jetton cannot transfer, swap, or spend it because every TON transaction requires native Toncoin to pay validator gas fees.
 
-Forcing a non-technical user to purchase Toncoin on a centralized exchange, complete KYC, and transfer it to a self-custodial wallet introduces high drop-off rates.
+Forcing a non-technical user to purchase Toncoin on a centralized exchange, complete KYC, and transfer it to a self-custodial wallet introduces massive friction.
 
 ### The Solution: W5 `internal_signed` Account Abstraction
 
 The **W5 (Wallet V5R1)** contract standard introduces native account abstraction on TON via **signed internal messages** (`auth_signed_internal`, opcode `0x73696e74`).
 
-This repository provides the missing off-chain plumbing:
-1. **Relayer API Server**: Accepts user-signed W5 payloads, validates signatures off-chain, sponsors native TON gas, and broadcasts the internal transaction to TON Testnet/Mainnet.
-2. **Telegram Mini App SDK (`@ton-gasless/w5-relayer/sdk`)**: A lightweight client library allowing frontend developers to integrate gasless transactions with just **2 lines of setup**.
-3. **Enterprise Defense Suite**: Anti-abuse rate limiting, off-chain cryptographic validation, and replay attack protection to prevent gas treasury drainage.
+This repository provides the battle-tested off-chain infrastructure:
+1. **Network-Neutral Relayer Server**: Supports both **TON Mainnet** and **TON Testnet**, accepts user-signed W5 payloads, validates signatures off-chain, sponsors native TON gas, and broadcasts internal transactions.
+2. **Dual Economic Model**:
+   - **Pure Sponsorship (Paymaster)**: The relayer sponsors 100% of gas fees for promotional or gasless user acquisition.
+   - **Jetton Fee Recovery Mode**: The W5 multi-action list automatically routes a micro-fee in Jettons (e.g. 0.05 USDT) to the relayer's fee collector in the same transaction, making the relayer self-sustaining and profitable.
+3. **Telegram Mini App SDK (`@ton-gasless/w5-relayer/sdk`)**: A lightweight client library allowing frontend developers to integrate gasless transactions with just **2 lines of setup**.
+4. **Hardened Defense Suite**:
+   - **Fail-Closed Replay Protection**: Contract `seqno` queries feature retry logic and fail closed on RPC errors to prevent replay attacks.
+   - **TreasuryGuard**: Enforces hard aggregate daily spending caps to prevent wallet drainage.
+   - **GasGuard**: Actively validates gas allocations on the request pipeline.
+   - **Dynamic Subwallet Resolution**: Decodes custom `subwalletNumber` from W5 payload headers, supporting all valid W5 wallet deployments.
+   - **Pluggable State Store**: `IStateStore` abstraction with in-memory default and Redis adapter capability.
 
 ---
 
@@ -44,6 +53,7 @@ This repository provides the missing off-chain plumbing:
 | @ton-gasless/w5-relayer   |                             |
 | Client SDK                |                             |
 | - Builds W5 Action List   |                             |
+| - (Optional) Adds Fee Tx  |                             |
 | - Signs cell with User Key|                             |
 +-------------+-------------+                             |
               |                                           |
@@ -51,20 +61,24 @@ This repository provides the missing off-chain plumbing:
               +------------------------------------------>|
                                                           |
                                            [Pre-flight Verification]
-                                           - IP & Wallet Rate Limiting
+                                           - App Attribution (X-API-Key)
+                                           - IP & Wallet Velocity Limiter
                                            - Size & BOC Sanitization
                                            - Off-chain Ed25519 Verification
-                                           - Replay Nonce Locking
+                                           - Dynamic Subwallet Resolution
+                                           - GasGuard & TreasuryGuard Caps
+                                           - Fail-Closed Seqno Check
                                                           |
                                                           | 3. Sponsoring Internal Message
                                                           |    (Attaches 0.05 TON Gas)
                                                           v
                                            +-----------------------------+
-                                           |         TON TESTNET         |
+                                           |      TON MAINNET/TESTNET    |
                                            |                             |
                                            |  User's W5 Wallet Contract  |
                                            |  - Verifies signature       |
-                                           |  - Executes Jetton transfer |
+                                           |  - Action 1: Jetton to User |
+                                           |  - Action 2: Fee to Relayer |
                                            +-----------------------------+
 ```
 
@@ -81,7 +95,7 @@ See [ARCHITECTURE.md](file:///c:/Users/USER/Downloads/ton%20grant/ARCHITECTURE.m
 ### 1. Installation
 
 ```bash
-git clone https://github.com/ton-infrastructure/ton-w5-gasless-relayer.git
+git clone https://github.com/ademikelz19-hub/ton-w5-gasless-relayer.git
 cd ton-w5-gasless-relayer
 npm install
 ```
@@ -98,7 +112,7 @@ Edit `.env` with your settings:
 
 ```ini
 PORT=3000
-TON_NETWORK=testnet
+TON_NETWORK=testnet  # or 'mainnet'
 TON_ENDPOINT=https://testnet.toncenter.com/api/v2/jsonRPC
 
 # Relayer Hot Wallet Seed Phrase (Funds gas for users)
@@ -108,8 +122,15 @@ RELAYER_MNEMONIC="word1 word2 ... word24"
 # Security & Gas Limits
 MAX_GAS_PER_TX_TON=0.05
 MIN_RELAYER_BALANCE_TON=0.5
-RATE_LIMIT_WINDOW_MS=60000
-RATE_LIMIT_MAX_REQUESTS=30
+DAILY_TREASURY_LIMIT_TON=10.0
+
+# Fee Recovery Configuration
+FEE_MODE=sponsored   # 'sponsored' or 'jetton_fee'
+FEE_COLLECTOR_ADDRESS=EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c
+
+# App Authorization
+REQUIRE_API_KEY=false
+RELAYER_API_KEYS=app1_secret_key,app2_secret_key
 ```
 
 ### 3. Build & Run the Relayer Server
@@ -133,32 +154,11 @@ To see the complete end-to-end W5 gasless workflow in action:
 npm run simulate
 ```
 
-Output:
-```
-======================================================================
-🚀 Starting TON W5 Gasless Relayer Testnet Simulation
-======================================================================
-[1/5] Generating User W5 Keypair...
-👤 User W5 Address: kQC88bZot1Xj89hmiOOq_qfbZ8fgXzizsGCiFBTBEY9uikS0
-[2/5] Constructing W5 internal_signed Gasless Transfer Payload...
-📦 Payload BOC: 276 chars (TTL: 180s)
-[3/5] Relayer Engine: Off-Chain Cryptographic Verification...
-🔍 Opcode: 0x73696e74 (W5 auth_signed_internal)
-✅ Off-chain Ed25519 signature verification: PASSED
-✅ Address ownership check: PASSED
-[4/5] Preparing Relayer Gas Sponsorship...
-⛽ Sponsoring Gas Amount: 0.05 TON
-[5/5] Broadcasting Internal Transaction to TON Testnet...
-🎉 SIMULATION COMPLETED SUCCESSFULLY!
-📝 Transaction Hash: f43c2f4206f5d8f818091ac9f8e2057f0a2ac3e67477827f64df35f60d844f00
-🔗 Explorer: https://testnet.tonviewer.com/transaction/f43c2f4206f5...
-```
-
 ---
 
 ## 🧪 Automated Testing
 
-Run the full automated unit and roundtrip integration test suite:
+Run the full automated test suite (16 tests across all security and cryptographic layers):
 
 ```bash
 npm run test
@@ -166,9 +166,9 @@ npm run test
 
 Test coverage includes:
 - **`parser.test.ts`**: Validates W5 BOC parsing, opcode verification (`0x73696e74`), and cell reconstruction.
-- **`verifier.test.ts`**: Tests Ed25519 cryptographic signatures, tampered payload rejection, expiration timestamps, and address ownership.
-- **`security.test.ts`**: Tests wallet-level rate limiters, replay attack prevention locks, and gas expenditure bounds.
-- **`sdk.test.ts`**: Tests TEP-74 Jetton message building, client payload creation, and live roundtrip HTTP submission.
+- **`verifier.test.ts`**: Tests Ed25519 cryptographic signatures, tampered payload rejection, expiration timestamps, dynamic non-zero subwallets, and fail-closed RPC outage behavior.
+- **`security.test.ts`**: Tests wallet-level rate limiters, ReplayGuard nonce locks, GasGuard parameter boundaries, and TreasuryGuard daily spend caps.
+- **`sdk.test.ts`**: Tests TEP-74 Jetton message building, Mainnet/Testnet address derivation, Jetton fee recovery action generation, and deterministic roundtrip HTTP submission.
 
 ---
 
@@ -181,10 +181,11 @@ Integrate gasless payments into any frontend or Telegram Mini App with **2 lines
 ```typescript
 import { TonW5RelayerClient } from './src/sdk/index.js';
 
-// Line 1: Initialize client pointing to your relayer
+// Line 1: Initialize client pointing to your relayer (supports 'mainnet' and 'testnet')
 const relayer = new TonW5RelayerClient({
   relayerUrl: 'https://relayer.my-app.io', // or http://localhost:3000
-  network: 'testnet',
+  network: 'mainnet',                      // or 'testnet'
+  apiKey: 'my_app_api_key',               // optional app attribution
 });
 ```
 
@@ -196,12 +197,18 @@ const result = await relayer.sendGaslessTransfer({
   publicKey: userPublicKey,
   seqno: currentWalletSeqno,
   jettonTransfer: {
-    jettonWalletAddress: 'kQD_user_usdt_wallet_address...',
+    jettonWalletAddress: 'EQB_user_usdt_wallet_address...',
     recipient: 'EQB_friend_address...',
     jettonAmount: 10_000_000n, // 10 USDT (6 decimals)
     comment: 'Payment for dinner',
   },
-  // Signer callback (supports TonConnect or raw ed25519 secretKey)
+  // Optional Fee Recovery: Reimburses the relayer in USDT directly
+  relayerFee: {
+    feeJettonWallet: 'EQB_user_usdt_wallet_address...',
+    feeRecipient: 'EQB_relayer_fee_collector...',
+    feeAmount: 50_000n, // 0.05 USDT fee
+  },
+  // Signer callback (supports TonConnect, Telegram WebApp wallet, or ed25519 secretKey)
   signer: async (signingHash) => {
     return await tonConnectProvider.signHash(signingHash);
   },
@@ -218,14 +225,17 @@ console.log('Explorer URL:', result.explorerUrl);
 ### `POST /relay`
 Core endpoint to submit signed W5 payloads.
 
-**Request Headers:** `Content-Type: application/json`
+**Request Headers:**
+- `Content-Type: application/json`
+- `X-API-Key: <key>` *(optional when REQUIRE_API_KEY=true)*
 
 **Request Body:**
 ```json
 {
   "userPublicKey": "dff3540ff07f681bc19cd4fc968a8acc2c7310af7f73e0ec4bfa5711dba3d04d",
-  "userWalletAddress": "kQC88bZot1Xj89hmiOOq_qfbZ8fgXzizsGCiFBTBEY9uikS0",
+  "userWalletAddress": "EQCFk1mDc0zMbEQ9cz5KrJ58cpWckL95Z81LNfzG70bf0c0V",
   "payloadBoc": "te6cckEBAwEAWgABc3NpbnT///8R////...==",
+  "waitForConfirmation": false,
   "metadata": {
     "appName": "TelegramShopMiniApp",
     "actionDescription": "Purchase in-game gems"
@@ -237,12 +247,13 @@ Core endpoint to submit signed W5 payloads.
 ```json
 {
   "success": true,
-  "txHash": "f43c2f4206f5d8f818091ac9f8e2057f0a2ac3e67477827f64df35f60d844f00",
-  "userWalletAddress": "kQC88bZot1Xj89hmiOOq_qfbZ8fgXzizsGCiFBTBEY9uikS0",
-  "relayedAt": 1789254676,
+  "txHash": "8089c49e8daf5534fb72e3f0b4f346759428db48ff9141649d97b4707ca7106f",
+  "userWalletAddress": "EQCFk1mDc0zMbEQ9cz5KrJ58cpWckL95Z81LNfzG70bf0c0V",
+  "relayedAt": 1789264325,
   "seqno": 0,
-  "validUntil": 1789254856,
-  "gasSponsoredTon": "0.0500"
+  "validUntil": 1789264505,
+  "gasSponsoredTon": "0.0500",
+  "confirmed": false
 }
 ```
 
@@ -254,35 +265,39 @@ Core endpoint to submit signed W5 payloads.
 | `INVALID_BOC` | Malformed Base64 or cell deserialization error. |
 | `SIGNATURE_VERIFICATION_FAILED` | Off-chain Ed25519 signature check failed. |
 | `TRANSACTION_EXPIRED` | Payload timestamp `valid_until` has passed. |
+| `SEQNO_MISMATCH` | Submitted seqno does not match contract sequence number. |
 | `REPLAY_ATTACK_DETECTED` | Duplicate transaction seqno currently in-flight. |
 | `RATE_LIMIT_EXCEEDED` | IP or wallet velocity limit reached. |
+| `TREASURY_LIMIT_EXCEEDED` | Daily relayer gas sponsorship budget reached. |
+| `UNAUTHORIZED_APP` | Missing or invalid X-API-Key header. |
+| `RPC_ERROR` | Network/RPC timeout during on-chain verification (fails closed). |
 | `INSUFFICIENT_RELAYER_BALANCE` | Relayer hot wallet balance dropped below safe threshold. |
 
 ### `GET /config`
-Returns relayer address, network parameters, supported opcodes, and gas limits.
+Returns relayer public address, network, `networkGlobalId`, daily treasury limit, fee mode, and supported opcodes.
 
 ### `POST /estimate-gas`
 Calculates estimated gas for a requested action count.
 
 ### `GET /health`
-Returns relayer wallet balance and RPC connectivity status.
+Returns relayer wallet balance, daily treasury spend metrics, and RPC connectivity status.
 
 ---
 
 ## 🛡️ Security Architecture & Anti-Drain Protections
 
-To protect the relayer hot wallet from being drained by malicious actors or botnets, the engine employs a defense-in-depth model:
-
 1. **Off-Chain Signature Verification**:
-   The relayer parses the W5 cell, reconstructs the exact signing root, and verifies the Ed25519 signature against the user's public key **before** making any network calls or attaching gas. Forged transactions are rejected at zero network cost to the relayer.
-2. **Replay & Concurrency Guards**:
-   In-flight nonces are locked in memory (`userAddress:seqno`) to prevent double-spend or duplicate broadcasting race conditions.
-3. **On-Chain Seqno Synchronization**:
-   The engine checks the live on-chain state to ensure the payload's `seqno` matches the contract's expected sequence number.
-4. **Dual-Tier Rate Limiting**:
-   Protects against IP spam (`express-rate-limit`) and per-wallet velocity abuse.
-5. **Zero Key Exposure**:
-   Relayer hot wallet mnemonics are strictly loaded via environment variables and never logged or exposed in client bundles.
+   The relayer parses the W5 cell, reconstructs the exact signing root, and verifies the Ed25519 signature against the user's public key **before** making any network calls or attaching gas. Forged transactions are dropped with zero network cost.
+2. **Fail-Closed Seqno Verification**:
+   Queries live contract state with exponential backoff. If the RPC call fails, times out, or rate limits, the request **fails closed** (HTTP 502 `RPC_ERROR`), guaranteeing replay protection cannot be bypassed by attacking the node infrastructure.
+3. **TreasuryGuard Budget Caps**:
+   Daily aggregate gas spending is tracked and bounded. Even if an attacker spins up thousands of Sybil wallets, the maximum loss is bounded by `DAILY_TREASURY_LIMIT_TON`.
+4. **Active GasGuard Validation**:
+   Sponsorship gas limits are strictly validated on every inbound transaction pipeline.
+5. **Dynamic Subwallet Decoding**:
+   Deserializes `walletIdRaw` into its component subwallet number and workchain, preventing false-positive signature rejections on custom W5 accounts.
+6. **Pluggable State Store (`IStateStore`)**:
+   Enables seamless migration from in-memory locks to Redis for multi-instance load-balanced production clusters.
 
 ---
 
@@ -292,7 +307,7 @@ This project directly fulfills the strategic imperatives established in **Bluepr
 
 - **Public Good & Open Source**: Full MIT license with modular, extensible TypeScript architecture.
 - **Architectural Mastery**: Directly integrates the TVM Actor Model, asynchronous message handling, and W5R1 cell schemas.
-- **Economic Velocity**: Unlocks frictionless payment flows for USDT and Jettons across the Telegram ecosystem.
+- **Economic Sustainability**: Solves the relayer paymaster dilemma with dual-mode operation (Sponsorship + Jetton Fee Recovery).
 
 ---
 

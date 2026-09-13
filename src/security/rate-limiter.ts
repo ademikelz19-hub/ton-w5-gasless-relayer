@@ -106,3 +106,32 @@ export function walletRateLimitMiddleware(req: Request, res: Response, next: Nex
 
   next();
 }
+
+/**
+ * Optional API key authentication middleware for Telegram Mini App backend attribution
+ */
+export function apiKeyAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
+  if (!config.REQUIRE_API_KEY) {
+    next();
+    return;
+  }
+
+  const apiKey = req.headers['x-api-key'] || req.query.apiKey;
+  const allowedKeys = (config.RELAYER_API_KEYS || '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean);
+
+  if (!apiKey || !allowedKeys.includes(String(apiKey))) {
+    res.status(401).json({
+      success: false,
+      error: {
+        code: 'UNAUTHORIZED_APP',
+        message: 'Invalid or missing X-API-Key header. Relayer access is restricted to registered Mini Apps.',
+      },
+    } satisfies RelayResponseError);
+    return;
+  }
+
+  next();
+}

@@ -1,7 +1,8 @@
-import { Address, beginCell } from '@ton/core';
+import { Address } from '@ton/core';
 import { signVerify } from '@ton/crypto';
 import { WalletContractV5R1, TonClient } from '@ton/ton';
-import { W5ParsedPayload, RelayErrorCode } from './types.js';
+import { W5ParsedPayload, RelayErrorCode, TonNetwork } from './types.js';
+import { NETWORK_GLOBAL_IDS, getNetworkGlobalId } from './w5-spec.js';
 
 export interface VerificationResult {
   isValid: boolean;
@@ -37,34 +38,50 @@ export class SignatureVerifier {
   }
 
   /**
-   * Verify that the provided userWalletAddress matches the WalletContractV5R1 derived from the public key.
+   * Verify that the provided userWalletAddress matches the WalletContractV5R1 derived from the public key,
+   * dynamically supporting any custom subwallet number and network.
    */
-  public static verifyAddressOwnership(publicKey: Buffer, userWalletAddress: string): boolean {
+  public static verifyAddressOwnership(
+    publicKey: Buffer,
+    userWalletAddress: string,
+    subwalletNumber: number = 0,
+    network?: TonNetwork
+  ): boolean {
     try {
       const targetAddress = Address.parse(userWalletAddress);
-      
-      // Test both mainnet context and testnet context if needed
-      const expectedWalletTestnet = WalletContractV5R1.create({
-        publicKey,
-        walletId: {
-          networkGlobalId: -3,
-          context: {
-            workChain: targetAddress.workChain,
-            walletVersion: 'v5r1',
-            subwalletNumber: 0,
-          },
-        },
-      });
+      const networkIds = network
+        ? [getNetworkGlobalId(network)]
+        : [NETWORK_GLOBAL_IDS.MAINNET, NETWORK_GLOBAL_IDS.TESTNET];
 
-      const expectedWalletDefault = WalletContractV5R1.create({
+      const subwalletsToTest = Array.from(new Set([subwalletNumber, 0]));
+
+      for (const netId of networkIds) {
+        for (const subwallet of subwalletsToTest) {
+          const derivedWallet = WalletContractV5R1.create({
+            publicKey,
+            walletId: {
+              networkGlobalId: netId,
+              context: {
+                workChain: targetAddress.workChain,
+                walletVersion: 'v5r1',
+                subwalletNumber: subwallet,
+              },
+            },
+          });
+
+          if (derivedWallet.address.equals(targetAddress)) {
+            return true;
+          }
+        }
+      }
+
+      // Also test standard default wallet constructor
+      const defaultWallet = WalletContractV5R1.create({
         publicKey,
         workChain: targetAddress.workChain,
       });
 
-      return (
-        expectedWalletTestnet.address.equals(targetAddress) ||
-        expectedWalletDefault.address.equals(targetAddress)
-      );
+      return defaultWallet.address.equals(targetAddress);
     } catch {
       return false;
     }
@@ -107,47 +124,63 @@ export class SignatureVerifier {
   }
 
   /**
-   * Query the on-chain seqno of the user's W5 wallet and verify that the payload seqno matches.
+   * Query the on-chain seqno of the user's W5 wallet with retry and exponential backoff.
+   * Throws an error on network/RPC failure so caller can fail closed.
    */
   public static async verifyOnChainSeqno(
     client: TonClient,
     userAddress: Address,
-    payloadSeqno: number
+    payloadSeqno: number,
+    maxRetries: number = 3,
+    initialBackoffMs: number = 250
   ): Promise<{ isValid: boolean; onChainSeqno: number; errorMessage?: string }> {
-    try {
-      const state = await client.getContractState(userAddress);
+    let lastError: any = null;
 
-      if (state.state !== 'active') {
-        // Uninitialized wallet: seqno must be 0
-        if (payloadSeqno !== 0) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const state = await client.getContractState(userAddress);
+
+        if (state.state !== 'active') {
+          // Uninitialized wallet: seqno must be 0
+          if (payloadSeqno !== 0) {
+            return {
+              isValid: false,
+              onChainSeqno: 0,
+              errorMessage: `Wallet contract is uninitialized on-chain. Expected seqno 0, got ${payloadSeqno}`,
+            };
+          }
+          return { isValid: true, onChainSeqno: 0 };
+        }
+
+        // Query get_seqno run method
+        const res = await client.runMethod(userAddress, 'seqno');
+        const onChainSeqno = res.stack.readNumber();
+
+        if (payloadSeqno !== onChainSeqno) {
           return {
             isValid: false,
-            onChainSeqno: 0,
-            errorMessage: `Wallet contract is uninitialized. Expected seqno 0, got ${payloadSeqno}`,
+            onChainSeqno,
+            errorMessage: `Seqno mismatch. Contract seqno is ${onChainSeqno}, but payload specifies ${payloadSeqno}`,
           };
         }
-        return { isValid: true, onChainSeqno: 0 };
-      }
 
-      // Query get_seqno run method
-      const res = await client.runMethod(userAddress, 'seqno');
-      const onChainSeqno = res.stack.readNumber();
+        return { isValid: true, onChainSeqno };
+      } catch (err: any) {
+        lastError = err;
+        // Known contract exit codes (e.g. uninitialized contract or method not found)
+        if (err.message && err.message.includes('exit_code: -13')) {
+          return { isValid: payloadSeqno === 0, onChainSeqno: 0 };
+        }
 
-      if (payloadSeqno !== onChainSeqno) {
-        return {
-          isValid: false,
-          onChainSeqno,
-          errorMessage: `Seqno mismatch. Contract seqno is ${onChainSeqno}, but payload specifies ${payloadSeqno}`,
-        };
+        // Exponential backoff with jitter if retryable
+        if (attempt < maxRetries - 1) {
+          const delay = initialBackoffMs * Math.pow(2, attempt) + Math.random() * 100;
+          await new Promise((r) => setTimeout(r, delay));
+        }
       }
-
-      return { isValid: true, onChainSeqno };
-    } catch (err: any) {
-      // If contract has not been deployed yet or runMethod fails due to uninit state
-      if (err.message && err.message.includes('exit_code: -13')) {
-        return { isValid: payloadSeqno === 0, onChainSeqno: 0 };
-      }
-      throw err;
     }
+
+    // Fail closed: rethrow error so relayer does NOT bypass replay protection
+    throw new Error(`RPC communication error while querying contract seqno: ${lastError?.message || 'timeout'}`);
   }
 }

@@ -2,13 +2,17 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { Address } from '@ton/core';
 import { config } from './config.js';
-import { W5_OPCODES } from './engine/w5-spec.js';
+import { W5_OPCODES, getNetworkGlobalId } from './engine/w5-spec.js';
 import { W5PayloadParser } from './engine/parser.js';
 import { SignatureVerifier } from './engine/verifier.js';
 import { RelayBroadcaster } from './engine/broadcaster.js';
-import { ipRateLimiter, walletRateLimitMiddleware } from './security/rate-limiter.js';
+import {
+  ipRateLimiter,
+  walletRateLimitMiddleware,
+  apiKeyAuthMiddleware,
+} from './security/rate-limiter.js';
 import { preFlightSanitizerMiddleware } from './security/sanitizer.js';
-import { ReplayGuard } from './security/guard.js';
+import { ReplayGuard, GasGuard, TreasuryGuard } from './security/guard.js';
 import {
   RelayRequestBody,
   RelayResponseSuccess,
@@ -33,6 +37,7 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
   app.use(cors());
   app.use(express.json({ limit: '64kb' }));
   app.use(ipRateLimiter);
+  app.use(apiKeyAuthMiddleware);
 
   /**
    * GET /health
@@ -48,6 +53,9 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
         relayerAddress: relayBroadcaster.getRelayerAddress(),
         relayerBalanceTon: balance.balanceTon,
         minRequiredBalanceTon: config.MIN_RELAYER_BALANCE_TON,
+        dailySpentTon: TreasuryGuard.getDailySpent().toFixed(4),
+        dailyLimitTon: config.DAILY_TREASURY_LIMIT_TON,
+        feeMode: config.FEE_MODE,
       });
     } catch (err: any) {
       res.status(503).json({
@@ -65,8 +73,12 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
     res.json({
       relayerAddress: relayBroadcaster.getRelayerAddress(),
       network: config.TON_NETWORK,
+      networkGlobalId: getNetworkGlobalId(config.TON_NETWORK),
       maxGasPerTxTon: config.MAX_GAS_PER_TX_TON,
       minRelayerBalanceTon: config.MIN_RELAYER_BALANCE_TON,
+      dailyTreasuryLimitTon: config.DAILY_TREASURY_LIMIT_TON,
+      feeMode: config.FEE_MODE,
+      feeCollectorAddress: config.FEE_COLLECTOR_ADDRESS || undefined,
       rateLimit: {
         windowMs: config.RATE_LIMIT_WINDOW_MS,
         maxRequests: config.RATE_LIMIT_MAX_REQUESTS,
@@ -91,7 +103,9 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
       estimatedGasTon,
       relayerSponsoringTon: config.MAX_GAS_PER_TX_TON.toFixed(4),
       minRelayerBalanceTon: config.MIN_RELAYER_BALANCE_TON.toFixed(4),
-      isSponsored: true,
+      isSponsored: config.FEE_MODE === 'sponsored',
+      feeMode: config.FEE_MODE,
+      requiredJettonFee: config.FEE_MODE === 'jetton_fee' ? '50000' : undefined, // 0.05 USDT
     });
   });
 
@@ -104,13 +118,26 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
     preFlightSanitizerMiddleware,
     walletRateLimitMiddleware,
     async (req: Request<{}, {}, RelayRequestBody>, res: Response) => {
-      const { userPublicKey, userWalletAddress, payloadBoc } = req.body;
+      const { userPublicKey, userWalletAddress, payloadBoc, waitForConfirmation } = req.body;
 
       try {
-        // 1. Parse W5 Payload
+        // 0. Wire GasGuard: Active security check on gas sponsorship safety
+        const gasLimitCheck = GasGuard.validateGasLimit(config.MAX_GAS_PER_TX_TON);
+        if (!gasLimitCheck.valid) {
+          return res.status(500).json({
+            success: false,
+            error: {
+              code: 'GAS_LIMIT_EXCEEDED',
+              message: gasLimitCheck.reason || 'Server gas limit configuration error',
+            },
+          } satisfies RelayResponseError);
+        }
+
+        // 1. Parse W5 Payload with network context
+        const networkGlobalId = getNetworkGlobalId(config.TON_NETWORK);
         let parsedPayload;
         try {
-          parsedPayload = W5PayloadParser.parse(payloadBoc);
+          parsedPayload = W5PayloadParser.parse(payloadBoc, networkGlobalId);
         } catch (err: any) {
           return res.status(400).json({
             success: false,
@@ -135,17 +162,19 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
           } satisfies RelayResponseError);
         }
 
-        // 3. Verify Address & Key Association
+        // 3. Verify Address & Key Association (Dynamic subwallet resolution)
         const isOwner = SignatureVerifier.verifyAddressOwnership(
           pubKeyBuffer,
-          userWalletAddress
+          userWalletAddress,
+          parsedPayload.subwalletNumber,
+          config.TON_NETWORK
         );
         if (!isOwner) {
           return res.status(400).json({
             success: false,
             error: {
               code: 'INVALID_SIGNATURE',
-              message: 'Provided userPublicKey does not correspond to userWalletAddress for W5R1.',
+              message: `Provided userPublicKey does not correspond to userWalletAddress for W5R1 (subwallet: ${parsedPayload.subwalletNumber}, network: ${config.TON_NETWORK}).`,
             },
           } satisfies RelayResponseError);
         }
@@ -166,7 +195,7 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
         }
 
         // 5. In-flight Nonce Lock (Replay Protection)
-        const lockAcquired = ReplayGuard.acquireLock(userWalletAddress, parsedPayload.seqno);
+        const lockAcquired = await ReplayGuard.acquireLock(userWalletAddress, parsedPayload.seqno);
         if (!lockAcquired) {
           return res.status(409).json({
             success: false,
@@ -177,7 +206,20 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
           } satisfies RelayResponseError);
         }
 
-        // 6. Verify On-Chain Seqno (prevents replay of stale messages)
+        // 6. Treasury Guard: Check & reserve daily aggregate budget
+        const budgetCheck = await TreasuryGuard.checkAndReserveBudget(config.MAX_GAS_PER_TX_TON);
+        if (!budgetCheck.allowed) {
+          await ReplayGuard.releaseLock(userWalletAddress, parsedPayload.seqno);
+          return res.status(429).json({
+            success: false,
+            error: {
+              code: 'TREASURY_LIMIT_EXCEEDED',
+              message: budgetCheck.reason || 'Daily gas sponsorship treasury budget exhausted',
+            },
+          } satisfies RelayResponseError);
+        }
+
+        // 7. Verify On-Chain Seqno with strict FAIL-CLOSED policy
         try {
           const client = relayBroadcaster.getTonClient();
           const targetAddress = Address.parse(userWalletAddress);
@@ -188,7 +230,7 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
           );
 
           if (!seqnoResult.isValid) {
-            ReplayGuard.releaseLock(userWalletAddress, parsedPayload.seqno);
+            await ReplayGuard.releaseLock(userWalletAddress, parsedPayload.seqno);
             return res.status(400).json({
               success: false,
               error: {
@@ -199,21 +241,32 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
             } satisfies RelayResponseError);
           }
         } catch (err: any) {
-          // In test environments or when RPC fails, warn and continue if testnet unreachable
-          console.warn('On-chain seqno query skipped or returned error:', err.message);
+          // FAIL CLOSED: Never silently proceed if RPC fails or is rate-limited!
+          await ReplayGuard.releaseLock(userWalletAddress, parsedPayload.seqno);
+          return res.status(502).json({
+            success: false,
+            error: {
+              code: 'RPC_ERROR',
+              message: `Failed to verify on-chain wallet state: ${err.message}. Transaction rejected to guarantee replay protection.`,
+            },
+          } satisfies RelayResponseError);
         }
 
-        // 7. Sponsoring Gas & Broadcasting Transaction
+        // 8. Sponsoring Gas & Broadcasting Transaction
         try {
+          const shouldWait = waitForConfirmation ?? config.WAIT_FOR_CONFIRMATION;
           const broadcastResult = await relayBroadcaster.broadcastW5Internal(
             userWalletAddress,
             parsedPayload,
-            config.MAX_GAS_PER_TX_TON
+            config.MAX_GAS_PER_TX_TON,
+            shouldWait
           );
 
           return res.status(200).json({
             success: true,
             txHash: broadcastResult.txHash,
+            logicalTime: broadcastResult.logicalTime,
+            confirmed: broadcastResult.confirmed,
             userWalletAddress,
             relayedAt: Math.floor(Date.now() / 1000),
             seqno: parsedPayload.seqno,
@@ -221,7 +274,7 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
             gasSponsoredTon: broadcastResult.gasSponsoredTon,
           } satisfies RelayResponseSuccess);
         } catch (err: any) {
-          ReplayGuard.releaseLock(userWalletAddress, parsedPayload.seqno);
+          await ReplayGuard.releaseLock(userWalletAddress, parsedPayload.seqno);
           return res.status(500).json({
             success: false,
             error: {

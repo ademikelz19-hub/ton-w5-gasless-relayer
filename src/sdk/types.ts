@@ -1,13 +1,17 @@
 import { MessageRelaxed, Address } from '@ton/core';
-import { RelayResponseSuccess } from '../engine/types.js';
+import { RelayResponseSuccess, TonNetwork } from '../engine/types.js';
 
 export interface RelayerClientOptions {
   /** The base URL of the W5 Gasless Relayer API (e.g. 'http://localhost:3000' or 'https://relayer.my-app.io') */
   relayerUrl: string;
   /** Network selection (default: 'testnet') */
-  network?: 'testnet' | 'mainnet';
+  network?: TonNetwork;
+  /** Optional API key for registered Telegram Mini Apps */
+  apiKey?: string;
   /** Timeout in milliseconds for HTTP requests */
   requestTimeoutMs?: number;
+  /** Whether to wait for on-chain block confirmation before returning */
+  waitForConfirmation?: boolean;
 }
 
 export interface JettonTransferConfig {
@@ -25,7 +29,20 @@ export interface JettonTransferConfig {
   comment?: string;
 }
 
+export interface RelayerFeePayment {
+  /** Relayer's Jetton wallet address or user's Jetton wallet */
+  feeJettonWallet: string | Address;
+  /** Relayer address collecting the fee */
+  feeRecipient: string | Address;
+  /** Amount of Jetton units to pay the relayer (e.g. 50000n = 0.05 USDT) */
+  feeAmount: bigint;
+  /** Optional comment (e.g. "Relayer gas fee") */
+  comment?: string;
+}
+
 export interface BuildGaslessTransferArgs {
+  /** Network selection (determines networkGlobalId: -239 for mainnet, -3 for testnet) */
+  network?: TonNetwork;
   /** User's W5 Wallet Public Key (Buffer, hex string, or base64) */
   publicKey: Buffer | string;
   /** Current seqno of the user's W5 wallet contract (0 if uninitialized) */
@@ -40,6 +57,8 @@ export interface BuildGaslessTransferArgs {
   comment?: string;
   /** Optional Jetton (USDT, etc.) transfer parameters */
   jettonTransfer?: JettonTransferConfig;
+  /** Optional Jetton fee payment to the relayer (Fee Recovery Mode) */
+  relayerFee?: RelayerFeePayment;
   /** Optional raw TON internal messages */
   messages?: MessageRelaxed[];
 }

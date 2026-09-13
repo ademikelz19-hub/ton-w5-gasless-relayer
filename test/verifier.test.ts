@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Address } from '@ton/core';
 import { keyPairFromSeed } from '@ton/crypto';
 import { WalletContractV5R1, internal } from '@ton/ton';
 import { W5PayloadParser } from '../src/engine/parser.js';
@@ -92,4 +93,53 @@ test('SignatureVerifier - verifies address ownership and public key normalizatio
   const fakeAddress = 'EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c';
   const isFakeOwner = SignatureVerifier.verifyAddressOwnership(kp.publicKey, fakeAddress);
   assert.equal(isFakeOwner, false);
+});
+
+test('SignatureVerifier - supports dynamic non-zero subwallet IDs', async () => {
+  const kp = await keyPairFromSeed(Buffer.alloc(32, 10));
+  const customSubwalletNumber = 42;
+
+  // Create W5 with custom subwallet
+  const customW5 = WalletContractV5R1.create({
+    publicKey: kp.publicKey,
+    walletId: {
+      networkGlobalId: -3,
+      context: {
+        workChain: 0,
+        walletVersion: 'v5r1',
+        subwalletNumber: customSubwalletNumber,
+      },
+    },
+  });
+
+  // Verify that SignatureVerifier correctly resolves and approves the non-zero subwallet
+  const isCustomOwner = SignatureVerifier.verifyAddressOwnership(
+    kp.publicKey,
+    customW5.address.toString(),
+    customSubwalletNumber,
+    'testnet'
+  );
+
+  assert.equal(isCustomOwner, true);
+});
+
+test('SignatureVerifier - verifyOnChainSeqno fails closed on simulated RPC network crash', async () => {
+  // Mock TonClient that simulates an RPC outage
+  const mockCrashingClient: any = {
+    getContractState: async () => {
+      throw new Error('503 Service Unavailable: Rate limited / network down');
+    },
+  };
+
+  const dummyAddress = Address.parse('EQBdUltQlfyFQf9dg7K7eyFD4mWURM8hOgVQqMOq9tEGUSEk');
+
+  // Must reject and throw error, ensuring relayer fails closed
+  await assert.rejects(
+    async () => {
+      await SignatureVerifier.verifyOnChainSeqno(mockCrashingClient, dummyAddress, 0, 1, 10);
+    },
+    (err: any) => {
+      return err.message.includes('RPC communication error');
+    }
+  );
 });

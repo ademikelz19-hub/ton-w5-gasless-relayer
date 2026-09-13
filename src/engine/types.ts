@@ -1,16 +1,27 @@
 import { Cell, Address } from '@ton/core';
 
+export type TonNetwork = 'testnet' | 'mainnet';
+
 export interface W5ParsedPayload {
   opcode: number;
   opcodeHex: string;
   isInternal: boolean;
   walletIdRaw: number;
+  subwalletNumber: number;
+  workChain: number;
   validUntil: number;
   seqno: number;
   signature: Buffer;
   signingCell: Cell;
   signingHash: Buffer;
   rawCell: Cell;
+  actionsListRef?: Cell;
+}
+
+export interface RelayerFeeConfig {
+  feeJettonWallet: string;
+  feeRecipient: string;
+  feeAmount: string;
 }
 
 export interface RelayRequestBody {
@@ -25,6 +36,8 @@ export interface RelayRequestBody {
     appName?: string;
     actionDescription?: string;
   };
+  /** Whether to await on-chain block inclusion before returning (default: false) */
+  waitForConfirmation?: boolean;
 }
 
 export interface RelayResponseSuccess {
@@ -35,6 +48,8 @@ export interface RelayResponseSuccess {
   seqno: number;
   validUntil: number;
   gasSponsoredTon: string;
+  confirmed?: boolean;
+  logicalTime?: string;
 }
 
 export interface RelayResponseError {
@@ -59,7 +74,12 @@ export type RelayErrorCode =
   | 'SEQNO_MISMATCH'
   | 'REPLAY_ATTACK_DETECTED'
   | 'RATE_LIMIT_EXCEEDED'
+  | 'TREASURY_LIMIT_EXCEEDED'
+  | 'UNAUTHORIZED_APP'
   | 'INSUFFICIENT_RELAYER_BALANCE'
+  | 'CONFIRMATION_TIMEOUT'
+  | 'GAS_LIMIT_EXCEEDED'
+  | 'MISSING_REQUIRED_FEE'
   | 'RPC_ERROR'
   | 'INTERNAL_ERROR';
 
@@ -73,13 +93,19 @@ export interface GasEstimationResponse {
   relayerSponsoringTon: string;
   minRelayerBalanceTon: string;
   isSponsored: boolean;
+  feeMode: 'sponsored' | 'jetton_fee';
+  requiredJettonFee?: string;
 }
 
 export interface RelayerConfigResponse {
   relayerAddress: string;
   network: string;
+  networkGlobalId: number;
   maxGasPerTxTon: number;
   minRelayerBalanceTon: number;
+  dailyTreasuryLimitTon: number;
+  feeMode: 'sponsored' | 'jetton_fee';
+  feeCollectorAddress?: string;
   rateLimit: {
     windowMs: number;
     maxRequests: number;

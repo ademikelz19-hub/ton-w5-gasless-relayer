@@ -7,7 +7,8 @@ import { W5PayloadBuilder } from '../src/sdk/builder.js';
 import { TonW5RelayerClient } from '../src/sdk/client.js';
 import { createRelayerServer } from '../src/server.js';
 import { W5PayloadParser } from '../src/engine/parser.js';
-import { W5_OPCODES } from '../src/engine/w5-spec.js';
+import { W5_OPCODES, NETWORK_GLOBAL_IDS } from '../src/engine/w5-spec.js';
+import { RelayBroadcaster } from '../src/engine/broadcaster.js';
 
 test('SDK - W5PayloadBuilder creates valid Jetton transfer message', () => {
   const dummySender = Address.parse('EQBdUltQlfyFQf9dg7K7eyFD4mWURM8hOgVQqMOq9tEGUSEk');
@@ -30,30 +31,87 @@ test('SDK - W5PayloadBuilder creates valid Jetton transfer message', () => {
   assert.equal(opcode, 0x0f8a7ea5); // TEP-74 op::transfer
 });
 
-test('SDK - W5PayloadBuilder builds and signs valid internal payload', async () => {
-  const kp = await keyPairFromSeed(Buffer.alloc(32, 7));
+test('SDK - W5PayloadBuilder supports Mainnet and Testnet network propagation', async () => {
+  const kp = await keyPairFromSeed(Buffer.alloc(32, 11));
+
+  // Testnet build
+  const testnetResult = await W5PayloadBuilder.buildAndSign(
+    {
+      network: 'testnet',
+      publicKey: kp.publicKey,
+      seqno: 0,
+      recipient: 'EQBdUltQlfyFQf9dg7K7eyFD4mWURM8hOgVQqMOq9tEGUSEk',
+      amountTon: '0.01',
+    },
+    kp.secretKey
+  );
+
+  // Mainnet build
+  const mainnetResult = await W5PayloadBuilder.buildAndSign(
+    {
+      network: 'mainnet',
+      publicKey: kp.publicKey,
+      seqno: 0,
+      recipient: 'EQBdUltQlfyFQf9dg7K7eyFD4mWURM8hOgVQqMOq9tEGUSEk',
+      amountTon: '0.01',
+    },
+    kp.secretKey
+  );
+
+  // Addresses must NOT have testnet-only flag on mainnet
+  assert.ok(testnetResult.walletAddress.startsWith('kQ') || testnetResult.walletAddress.startsWith('0:'));
+  assert.ok(mainnetResult.walletAddress.startsWith('EQ') || mainnetResult.walletAddress.startsWith('0:'));
+
+  const parsedMainnet = W5PayloadParser.parse(mainnetResult.payloadBoc, NETWORK_GLOBAL_IDS.MAINNET);
+  assert.equal(parsedMainnet.opcode, W5_OPCODES.AUTH_SIGNED_INTERNAL);
+});
+
+test('SDK - W5PayloadBuilder generates Jetton Fee Recovery action', async () => {
+  const kp = await keyPairFromSeed(Buffer.alloc(32, 12));
+  const dummyJettonWallet = new Address(0, Buffer.alloc(32, 1));
+  const dummyRecipient = 'EQBdUltQlfyFQf9dg7K7eyFD4mWURM8hOgVQqMOq9tEGUSEk';
+  const dummyFeeCollector = 'EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c';
 
   const result = await W5PayloadBuilder.buildAndSign(
     {
       publicKey: kp.publicKey,
       seqno: 0,
-      recipient: 'EQBdUltQlfyFQf9dg7K7eyFD4mWURM8hOgVQqMOq9tEGUSEk',
-      amountTon: '0.01',
-      comment: 'sdk-test',
+      jettonTransfer: {
+        jettonWalletAddress: dummyJettonWallet,
+        recipient: dummyRecipient,
+        jettonAmount: 5000000n, // 5 USDT
+      },
+      relayerFee: {
+        feeJettonWallet: dummyJettonWallet,
+        feeRecipient: dummyFeeCollector,
+        feeAmount: 50000n, // 0.05 USDT fee
+      },
     },
     kp.secretKey
   );
 
   assert.ok(result.payloadBoc);
-  assert.ok(result.walletAddress);
-
   const parsed = W5PayloadParser.parse(result.payloadBoc);
   assert.equal(parsed.opcode, W5_OPCODES.AUTH_SIGNED_INTERNAL);
-  assert.equal(parsed.seqno, 0);
+  // Contains child references representing multiple out actions
+  assert.ok(parsed.actionsListRef);
 });
 
-test('SDK & Server Roundtrip - Client submits gasless payload to relayer server', async () => {
-  const app = createRelayerServer();
+test('SDK & Server Roundtrip - Client submits gasless payload to relayer server with deterministic mock', async () => {
+  // Mock Broadcaster with deterministic on-chain response
+  const mockBroadcaster = new RelayBroadcaster({
+    endpoint: 'http://mock-rpc',
+    gasSponsorshipTon: 0.05,
+  });
+
+  // Inject mock TonClient into broadcaster
+  (mockBroadcaster as any).client = {
+    getContractState: async () => ({ state: 'uninitialized' }),
+    runMethod: async () => ({ stack: { readNumber: () => 0 } }),
+    getBalance: async () => 1000000000n,
+  };
+
+  const app = createRelayerServer(mockBroadcaster);
   const server = http.createServer(app);
 
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -61,7 +119,7 @@ test('SDK & Server Roundtrip - Client submits gasless payload to relayer server'
   const relayerUrl = `http://localhost:${port}`;
 
   try {
-    const client = new TonW5RelayerClient({ relayerUrl });
+    const client = new TonW5RelayerClient({ relayerUrl, network: 'testnet' });
 
     // 1. Test /config
     const configData = await client.getConfig();
@@ -73,7 +131,7 @@ test('SDK & Server Roundtrip - Client submits gasless payload to relayer server'
     assert.ok(parseFloat(gasEst.estimatedGasTon) > 0);
 
     // 3. Test full gasless transfer submission
-    const kp = await keyPairFromSeed(Buffer.alloc(32, 8));
+    const kp = await keyPairFromSeed(Buffer.alloc(32, 13));
     const relayResult = await client.sendGaslessTransfer({
       publicKey: kp.publicKey,
       seqno: 0,

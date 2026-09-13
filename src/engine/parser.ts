@@ -1,5 +1,5 @@
-import { Cell, beginCell, Slice } from '@ton/core';
-import { W5_OPCODES, W5_DEFAULTS } from './w5-spec.js';
+import { Cell, beginCell } from '@ton/core';
+import { W5_OPCODES, W5_DEFAULTS, decodeWalletIdV5R1, NETWORK_GLOBAL_IDS } from './w5-spec.js';
 import { W5ParsedPayload } from './types.js';
 
 export class W5PayloadParser {
@@ -7,7 +7,10 @@ export class W5PayloadParser {
    * Parse a Base64-encoded BOC string or raw Cell into structured W5 internal_signed payload data.
    * Reconstructs the exact signing cell and computes its hash for cryptographic verification.
    */
-  public static parse(payloadBocOrCell: string | Cell): W5ParsedPayload {
+  public static parse(
+    payloadBocOrCell: string | Cell,
+    networkGlobalId: number = NETWORK_GLOBAL_IDS.TESTNET
+  ): W5ParsedPayload {
     const rawCell = typeof payloadBocOrCell === 'string'
       ? Cell.fromBase64(payloadBocOrCell)
       : payloadBocOrCell;
@@ -56,17 +59,26 @@ export class W5PayloadParser {
     const validUntil = headerSlice.loadUint(W5_DEFAULTS.VALID_UNTIL_BITS);
     const seqno = headerSlice.loadUint(W5_DEFAULTS.SEQNO_BITS);
 
+    // Dynamically decode the subwallet number and workchain from the wallet ID
+    const decodedId = decodeWalletIdV5R1(walletIdRaw, networkGlobalId);
+
+    // If there is a child reference, it contains the OutActions list
+    const actionsListRef = signingCell.refs.length > 0 ? signingCell.refs[0] : undefined;
+
     return {
       opcode,
       opcodeHex,
       isInternal,
       walletIdRaw,
+      subwalletNumber: decodedId.subwalletNumber,
+      workChain: decodedId.workChain,
       validUntil,
       seqno,
       signature,
       signingCell,
       signingHash,
       rawCell,
+      actionsListRef,
     };
   }
 }

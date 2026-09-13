@@ -16,11 +16,24 @@ const envSchema = z.object({
   
   MAX_GAS_PER_TX_TON: z.coerce.number().default(0.05),
   MIN_RELAYER_BALANCE_TON: z.coerce.number().default(0.5),
+  DAILY_TREASURY_LIMIT_TON: z.coerce.number().default(10.0),
   
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(30),
   MAX_PENDING_PER_WALLET: z.coerce.number().default(3),
   MAX_PAYLOAD_SIZE_BYTES: z.coerce.number().default(4096),
+
+  // Treasury & App Attribution
+  RELAYER_API_KEYS: z.string().optional().default(''),
+  REQUIRE_API_KEY: z.coerce.boolean().default(false),
+
+  // Fee model: pure sponsored paymaster vs jetton fee recovery
+  FEE_MODE: z.enum(['sponsored', 'jetton_fee']).default('sponsored'),
+  FEE_COLLECTOR_ADDRESS: z.string().optional().default(''),
+
+  // Confirmation polling
+  WAIT_FOR_CONFIRMATION: z.coerce.boolean().default(false),
+  CONFIRMATION_TIMEOUT_MS: z.coerce.number().default(30000),
 });
 
 const parsed = envSchema.safeParse(process.env);
