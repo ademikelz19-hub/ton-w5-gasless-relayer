@@ -1,4 +1,5 @@
 import { Cell, Address } from '@ton/core';
+import { OutActionSendMsg } from '@ton/core';
 
 export type TonNetwork = 'testnet' | 'mainnet';
 
@@ -16,6 +17,10 @@ export interface W5ParsedPayload {
   signingHash: Buffer;
   rawCell: Cell;
   actionsListRef?: Cell;
+  /** Correctly-decoded sendMsg out-actions from the signed payload (see engine/actions.ts).
+   * Used for fee enforcement when FEE_MODE=jetton_fee. Empty if the action list couldn't
+   * be decoded (treated as "no verifiable actions", not "skip verification"). */
+  sendMsgActions: OutActionSendMsg[];
 }
 
 export interface RelayerFeeConfig {
@@ -38,6 +43,12 @@ export interface RelayRequestBody {
   };
   /** Whether to await on-chain block inclusion before returning (default: false) */
   waitForConfirmation?: boolean;
+  /** How much TON gas the client is requesting the relayer sponsor for this specific
+   * request, computed by W5PayloadBuilder.estimateRequiredGasTon based on the actual
+   * action bundle. Falls back to config.MAX_GAS_PER_TX_TON server-side if omitted (older
+   * SDK clients). Always validated against the operator's ceiling and an absolute hard
+   * ceiling before use — see GasGuard.validateGasLimit. */
+  requestedGasTon?: number;
 }
 
 export interface RelayResponseSuccess {
@@ -50,6 +61,15 @@ export interface RelayResponseSuccess {
   gasSponsoredTon: string;
   confirmed?: boolean;
   logicalTime?: string;
+  /** Honest broadcast status: 'simulated' when no RELAYER_MNEMONIC is configured (no real
+   * on-chain effect occurred at all — previously this case reported confirmed:true, which
+   * could be misread as a real confirmation), 'pending' when submitted but not yet
+   * observed to land, 'confirmed' once the target wallet's seqno has actually advanced. */
+  status: 'confirmed' | 'pending' | 'simulated';
+  /** How much TON was actually sponsored for this request (may differ from the operator's
+   * MAX_GAS_PER_TX_TON ceiling when the client requested less, or when older clients
+   * didn't send requestedGasTon and the server default was used). */
+  gasRequestedTon?: string;
 }
 
 export interface RelayResponseError {

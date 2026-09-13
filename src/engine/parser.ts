@@ -1,5 +1,6 @@
-import { Cell, beginCell } from '@ton/core';
+import { Cell, beginCell, OutActionSendMsg } from '@ton/core';
 import { W5_OPCODES, W5_DEFAULTS, decodeWalletIdV5R1, NETWORK_GLOBAL_IDS } from './w5-spec.js';
+import { decodeBasicSendMsgActions } from './actions.js';
 import { W5ParsedPayload } from './types.js';
 
 export class W5PayloadParser {
@@ -62,7 +63,22 @@ export class W5PayloadParser {
     // Dynamically decode the subwallet number and workchain from the wallet ID
     const decodedId = decodeWalletIdV5R1(walletIdRaw, networkGlobalId);
 
-    // If there is a child reference, it contains the OutActions list
+    // Decode the actual sendMsg out-actions by reading the maybe-ref bit that follows
+    // seqno in the real bitstream layout (see engine/actions.ts for why this replaces a
+    // previous refs[0]-index guess). headerSlice is positioned right after seqno here.
+    let sendMsgActions: OutActionSendMsg[];
+    try {
+      sendMsgActions = decodeBasicSendMsgActions(headerSlice);
+    } catch {
+      // A payload we can't decode the action list for is still a validly-signed W5
+      // message as far as opcode/seqno/signature go — but callers that need to inspect
+      // actions (e.g. fee enforcement) get an empty list and must treat that as "no
+      // verifiable actions found", not "verification skipped".
+      sendMsgActions = [];
+    }
+
+    // Kept for diagnostics/backwards compatibility — not used for fee verification
+    // anymore, since refs[0] is not reliably "the action list" (see actions.ts).
     const actionsListRef = signingCell.refs.length > 0 ? signingCell.refs[0] : undefined;
 
     return {
@@ -79,6 +95,7 @@ export class W5PayloadParser {
       signingHash,
       rawCell,
       actionsListRef,
+      sendMsgActions,
     };
   }
 }

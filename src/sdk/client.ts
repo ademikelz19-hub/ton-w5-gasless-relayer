@@ -96,7 +96,7 @@ export class TonW5RelayerClient {
    */
   public async sendGaslessTransfer(args: ExecuteGaslessTransferArgs): Promise<RelayResult> {
     const targetNetwork = args.network || this.network;
-    const { walletAddress, payloadBoc } = await W5PayloadBuilder.buildAndSign(
+    const { walletAddress, payloadBoc, requestedGasTon } = await W5PayloadBuilder.buildAndSign(
       {
         ...args,
         network: targetNetwork,
@@ -116,6 +116,7 @@ export class TonW5RelayerClient {
         payloadBoc,
         metadata: args.metadata,
         waitForConfirmation: this.defaultWaitForConfirmation,
+        requestedGasTon,
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
@@ -146,6 +147,7 @@ export class TonW5RelayerClient {
     payloadBoc: string;
     metadata?: { appName?: string; actionDescription?: string };
     waitForConfirmation?: boolean;
+    requestedGasTon?: number;
   }): Promise<RelayResult> {
     const pubKeyBuf = SignatureVerifier.normalizePublicKey(params.userPublicKey);
 
@@ -158,6 +160,7 @@ export class TonW5RelayerClient {
         payloadBoc: params.payloadBoc,
         metadata: params.metadata,
         waitForConfirmation: params.waitForConfirmation ?? this.defaultWaitForConfirmation,
+        requestedGasTon: params.requestedGasTon,
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });

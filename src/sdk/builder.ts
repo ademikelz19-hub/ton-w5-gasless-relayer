@@ -16,7 +16,7 @@ import {
   SignerFn,
 } from './types.js';
 import { SignatureVerifier } from '../engine/verifier.js';
-import { getNetworkGlobalId } from '../engine/w5-spec.js';
+import { getNetworkGlobalId, JETTON_ACTION_BASE_GAS_TON, BASE_W5_EXECUTION_GAS_TON } from '../engine/w5-spec.js';
 
 export class W5PayloadBuilder {
   /**
@@ -63,8 +63,11 @@ export class W5PayloadBuilder {
       .storeMaybeRef(forwardPayload)
       .endCell();
 
-    // Value to attach for gas forwarding (e.g. 0.05 TON)
-    const attachedValue = toNano('0.05') + forwardTonAmount;
+    // Value to attach so the sender's jetton wallet has enough TON to cover its own
+    // processing gas plus the forward-notification amount. Previously this was a bare
+    // `toNano('0.05')` divorced from any config — see JETTON_ACTION_BASE_GAS_TON's doc
+    // comment in w5-spec.ts for why that was a real (not just theoretical) shortfall bug.
+    const attachedValue = toNano(JETTON_ACTION_BASE_GAS_TON.toString()) + forwardTonAmount;
 
     return internal({
       to: targetJettonWallet,
@@ -72,6 +75,30 @@ export class W5PayloadBuilder {
       body,
       bounce: true,
     });
+  }
+
+  /**
+   * Compute how much TON the relayer actually needs to sponsor for a given action
+   * bundle: base wallet-execution overhead, plus per-jetton-action gas for whichever of
+   * `jettonTransfer` / `relayerFee` are present. This is what closes the gap described in
+   * JETTON_ACTION_BASE_GAS_TON's doc comment — the relayer now sponsors an amount that
+   * scales with what's actually being sent, instead of a flat amount that silently
+   * assumed exactly one action.
+   */
+  public static estimateRequiredGasTon(args: BuildGaslessTransferArgs): number {
+    let totalTon = BASE_W5_EXECUTION_GAS_TON;
+
+    if (args.jettonTransfer) {
+      const forward = args.jettonTransfer.forwardTonAmount ?? toNano('0.01');
+      totalTon += JETTON_ACTION_BASE_GAS_TON + Number(forward) / 1e9;
+    }
+    if (args.relayerFee) {
+      // createFeeMessage/createJettonTransferMessage forwards a default 0.01 TON amount
+      // for the fee action too, matching how it's actually built below.
+      totalTon += JETTON_ACTION_BASE_GAS_TON + 0.01;
+    }
+
+    return Math.round(totalTon * 1e4) / 1e4; // round to 4 decimal places
   }
 
   /**
@@ -212,7 +239,7 @@ export class W5PayloadBuilder {
   public static async buildAndSign(
     args: BuildGaslessTransferArgs,
     signer: Buffer | SignerFn
-  ): Promise<{ walletAddress: string; payloadBoc: string; payloadCell: Cell; validUntil: number }> {
+  ): Promise<{ walletAddress: string; payloadBoc: string; payloadCell: Cell; validUntil: number; requestedGasTon: number }> {
     const validUntil = args.validUntil ?? Math.floor(Date.now() / 1000) + 180;
     const network = args.network || 'testnet';
     const { wallet, signingHash, finalizeWithSignature } = this.buildUnsignedPayload({
@@ -229,12 +256,14 @@ export class W5PayloadBuilder {
     }
 
     const { payloadCell, payloadBoc } = finalizeWithSignature(signature);
+    const requestedGasTon = this.estimateRequiredGasTon(args);
 
     return {
       walletAddress: wallet.address.toString({ testOnly: network === 'testnet' }),
       payloadBoc,
       payloadCell,
       validUntil,
+      requestedGasTon,
     };
   }
 }

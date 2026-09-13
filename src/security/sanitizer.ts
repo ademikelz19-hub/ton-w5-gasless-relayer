@@ -8,7 +8,7 @@ export function preFlightSanitizerMiddleware(
   res: Response,
   next: NextFunction
 ): void {
-  const { userPublicKey, userWalletAddress, payloadBoc } = req.body || {};
+  const { userPublicKey, userWalletAddress, payloadBoc, requestedGasTon } = req.body || {};
 
   // 1. Check required fields
   if (!userPublicKey || typeof userPublicKey !== 'string') {
@@ -98,6 +98,21 @@ export function preFlightSanitizerMiddleware(
       },
     } satisfies RelayResponseError);
     return;
+  }
+
+  // 6. Validate optional requestedGasTon, if provided — a coarse sanity check here; the
+  // real ceiling enforcement happens in GasGuard once we know the operator's configured max.
+  if (requestedGasTon !== undefined) {
+    if (typeof requestedGasTon !== 'number' || !Number.isFinite(requestedGasTon) || requestedGasTon <= 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'requestedGasTon must be a positive number if provided.',
+        },
+      } satisfies RelayResponseError);
+      return;
+    }
   }
 
   next();

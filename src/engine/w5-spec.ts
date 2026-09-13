@@ -35,6 +35,40 @@ export const W5_DEFAULTS = {
   MAX_ACTIONS_COUNT: 255,
 } as const;
 
+/**
+ * Gas economics for jetton-transfer-style actions.
+ *
+ * BUG THIS FIXES: `createJettonTransferMessage` previously hardcoded `toNano('0.05')` as
+ * the value attached to EACH jetton-transfer action it built, completely independent of
+ * `config.MAX_GAS_PER_TX_TON` (the amount the relayer actually sponsors). With the default
+ * forward amount of 0.01 TON, a single jetton transfer already needs 0.05 + 0.01 = 0.06 TON
+ * forwarded out of a wallet that, by the "Zero-TON Paradox" premise this whole project
+ * exists to solve, starts with ~0 TON — while the relayer only sponsors 0.05 TON by
+ * default. That's a real shortfall even in the single-action case, and bundling a second
+ * jetton-value-bearing action (e.g. a relayer fee) roughly doubles it to ~0.12 TON needed
+ * against the same 0.05 TON sponsorship.
+ *
+ * Fix: name the constant, and give the SDK a way to compute how much gas a given action
+ * bundle actually requires (see W5PayloadBuilder.estimateRequiredGasTon), so the amount
+ * requested from — and validated by — the relayer scales with what's actually being sent,
+ * instead of every request silently assuming exactly one action's worth of gas.
+ */
+export const JETTON_ACTION_BASE_GAS_TON = 0.04;
+export const DEFAULT_FORWARD_TON_AMOUNT = 0.01;
+/** Small fixed overhead for the W5 wallet's own action-list execution, independent of how
+ * many jetton actions are bundled (covers compute/storage for processing the signed
+ * message itself). */
+export const BASE_W5_EXECUTION_GAS_TON = 0.01;
+
+/**
+ * Hard ceiling on per-transaction gas sponsorship, enforced in code independent of the
+ * operator-configurable MAX_GAS_PER_TX_TON env var, so a misconfigured .env (or a client
+ * requesting gas for an implausibly large action bundle) can't push sponsorship past a
+ * sane absolute bound. Sized to comfortably cover a handful of bundled jetton actions
+ * (each ~0.05 TON) plus execution overhead, not to be a realistic per-request amount.
+ */
+export const ABSOLUTE_MAX_GAS_PER_TX_TON = 0.5;
+
 export interface DecodedWalletIdV5R1 {
   networkGlobalId: number;
   workChain: number;

@@ -142,6 +142,10 @@ test('SDK & Server Roundtrip - Client submits gasless payload to relayer server 
 
     assert.equal(relayResult.success, true);
     assert.ok(relayResult.txHash);
+    // No RELAYER_MNEMONIC in the test env — this must honestly say 'simulated' rather
+    // than implying a real on-chain confirmation occurred (previously `confirmed: true`
+    // was returned unconditionally in simulated mode).
+    assert.equal(relayResult.status, 'simulated');
     assert.match(relayResult.explorerUrl, /testnet\.tonviewer\.com/);
   } finally {
     server.close();

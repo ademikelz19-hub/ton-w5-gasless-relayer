@@ -14,7 +14,7 @@ const envSchema = z.object({
   
   RELAYER_MNEMONIC: z.string().optional().default(''),
   
-  MAX_GAS_PER_TX_TON: z.coerce.number().default(0.05),
+  MAX_GAS_PER_TX_TON: z.coerce.number().default(0.08),
   MIN_RELAYER_BALANCE_TON: z.coerce.number().default(0.5),
   DAILY_TREASURY_LIMIT_TON: z.coerce.number().default(10.0),
   
@@ -30,10 +30,17 @@ const envSchema = z.object({
   // Fee model: pure sponsored paymaster vs jetton fee recovery
   FEE_MODE: z.enum(['sponsored', 'jetton_fee']).default('sponsored'),
   FEE_COLLECTOR_ADDRESS: z.string().optional().default(''),
+  // Minimum jetton units required in a fee-collection action when FEE_MODE=jetton_fee.
+  // Enforced server-side by decoding the signed action list — see MISSING_REQUIRED_FEE.
+  MIN_JETTON_FEE_UNITS: z.string().default('50000'), // e.g. 0.05 USDT (6 decimals)
 
   // Confirmation polling
   WAIT_FOR_CONFIRMATION: z.coerce.boolean().default(false),
   CONFIRMATION_TIMEOUT_MS: z.coerce.number().default(30000),
+
+  // Redis URL for distributed ReplayGuard/TreasuryGuard state (e.g. redis://localhost:6379).
+  // Without this, both are process-local only — see security/guard.ts.
+  REDIS_URL: z.string().optional().default(''),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -44,5 +51,12 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
+
+if (config.FEE_MODE === 'jetton_fee' && !config.FEE_COLLECTOR_ADDRESS) {
+  throw new Error(
+    'Configuration error: FEE_MODE is "jetton_fee" but FEE_COLLECTOR_ADDRESS is not set. ' +
+      'The relayer cannot enforce fee collection without knowing where fees should go.'
+  );
+}
 
 export type Config = typeof config;

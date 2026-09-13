@@ -6,6 +6,7 @@ import { W5_OPCODES, getNetworkGlobalId } from './engine/w5-spec.js';
 import { W5PayloadParser } from './engine/parser.js';
 import { SignatureVerifier } from './engine/verifier.js';
 import { RelayBroadcaster } from './engine/broadcaster.js';
+import { findJettonTransfersTo } from './engine/actions.js';
 import {
   ipRateLimiter,
   walletRateLimitMiddleware,
@@ -96,8 +97,10 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
    */
   app.post('/estimate-gas', (req: Request, res: Response<GasEstimationResponse>) => {
     const actionCount = Number(req.body?.actionCount) || 1;
-    // Base cost: ~0.025 TON for W5 execution + ~0.015 TON per attached outgoing action
-    const estimatedGasTon = (0.025 + actionCount * 0.015).toFixed(4);
+    // Matches sdk/builder.ts's estimateRequiredGasTon: base execution overhead plus
+    // per-jetton-action gas — previously this endpoint used an unrelated flat formula
+    // that didn't match what createJettonTransferMessage actually attaches per action.
+    const estimatedGasTon = (0.01 + actionCount * 0.05).toFixed(4);
 
     res.json({
       estimatedGasTon,
@@ -105,7 +108,7 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
       minRelayerBalanceTon: config.MIN_RELAYER_BALANCE_TON.toFixed(4),
       isSponsored: config.FEE_MODE === 'sponsored',
       feeMode: config.FEE_MODE,
-      requiredJettonFee: config.FEE_MODE === 'jetton_fee' ? '50000' : undefined, // 0.05 USDT
+      requiredJettonFee: config.FEE_MODE === 'jetton_fee' ? config.MIN_JETTON_FEE_UNITS : undefined,
     });
   });
 
@@ -118,17 +121,27 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
     preFlightSanitizerMiddleware,
     walletRateLimitMiddleware,
     async (req: Request<{}, {}, RelayRequestBody>, res: Response) => {
-      const { userPublicKey, userWalletAddress, payloadBoc, waitForConfirmation } = req.body;
+      const { userPublicKey, userWalletAddress, payloadBoc, waitForConfirmation, requestedGasTon: rawRequestedGasTon } = req.body;
 
       try {
-        // 0. Wire GasGuard: Active security check on gas sponsorship safety
-        const gasLimitCheck = GasGuard.validateGasLimit(config.MAX_GAS_PER_TX_TON);
+        // 0. Determine and validate the gas amount to sponsor for THIS request. Previously
+        // this was always the static config.MAX_GAS_PER_TX_TON, which — see
+        // JETTON_ACTION_BASE_GAS_TON's doc comment in w5-spec.ts — didn't actually cover
+        // what a real jetton-transfer (let alone a jetton-transfer + fee bundle) needs.
+        // The SDK now computes and sends a real per-request amount; older clients that
+        // don't send one fall back to the configured default (single-action) amount.
+        const requestedGasTon =
+          typeof rawRequestedGasTon === 'number' && rawRequestedGasTon > 0
+            ? rawRequestedGasTon
+            : config.MAX_GAS_PER_TX_TON;
+
+        const gasLimitCheck = GasGuard.validateGasLimit(requestedGasTon, config.MAX_GAS_PER_TX_TON);
         if (!gasLimitCheck.valid) {
-          return res.status(500).json({
+          return res.status(400).json({
             success: false,
             error: {
               code: 'GAS_LIMIT_EXCEEDED',
-              message: gasLimitCheck.reason || 'Server gas limit configuration error',
+              message: gasLimitCheck.reason || 'Requested gas amount failed validation',
             },
           } satisfies RelayResponseError);
         }
@@ -194,6 +207,41 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
           } satisfies RelayResponseError);
         }
 
+        // 4.5. FEE_MODE enforcement — previously MISSING_REQUIRED_FEE was defined as an
+        // error code but never thrown: a client could simply omit the relayerFee action
+        // and get sponsored for free even with FEE_MODE=jetton_fee configured. This
+        // decodes the ACTUAL signed action list (now that it's cryptographically
+        // verified) and requires a jetton-transfer to the configured fee collector for at
+        // least the configured minimum, or refuses the request outright.
+        if (config.FEE_MODE === 'jetton_fee') {
+          let feeCollector: Address;
+          try {
+            feeCollector = Address.parse(config.FEE_COLLECTOR_ADDRESS);
+          } catch {
+            return res.status(500).json({
+              success: false,
+              error: {
+                code: 'INTERNAL_ERROR',
+                message: 'Server misconfiguration: FEE_COLLECTOR_ADDRESS is not a valid TON address.',
+              },
+            } satisfies RelayResponseError);
+          }
+
+          const minFeeUnits = BigInt(config.MIN_JETTON_FEE_UNITS);
+          const feeTransfers = findJettonTransfersTo(parsedPayload.sendMsgActions, feeCollector);
+          const hasValidFee = feeTransfers.some((t) => t.jettonAmount >= minFeeUnits);
+
+          if (!hasValidFee) {
+            return res.status(402).json({
+              success: false,
+              error: {
+                code: 'MISSING_REQUIRED_FEE',
+                message: `FEE_MODE is 'jetton_fee': the signed payload must include a jetton-transfer action sending at least ${config.MIN_JETTON_FEE_UNITS} units to the configured fee collector (${config.FEE_COLLECTOR_ADDRESS}). None was found in this payload.`,
+              },
+            } satisfies RelayResponseError);
+          }
+        }
+
         // 5. In-flight Nonce Lock (Replay Protection)
         const lockAcquired = await ReplayGuard.acquireLock(userWalletAddress, parsedPayload.seqno);
         if (!lockAcquired) {
@@ -206,8 +254,9 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
           } satisfies RelayResponseError);
         }
 
-        // 6. Treasury Guard: Check & reserve daily aggregate budget
-        const budgetCheck = await TreasuryGuard.checkAndReserveBudget(config.MAX_GAS_PER_TX_TON);
+        // 6. Treasury Guard: Check & reserve daily aggregate budget (against the actual
+        // requested amount, not always the static configured ceiling)
+        const budgetCheck = await TreasuryGuard.checkAndReserveBudget(requestedGasTon);
         if (!budgetCheck.allowed) {
           await ReplayGuard.releaseLock(userWalletAddress, parsedPayload.seqno);
           return res.status(429).json({
@@ -258,20 +307,28 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
           const broadcastResult = await relayBroadcaster.broadcastW5Internal(
             userWalletAddress,
             parsedPayload,
-            config.MAX_GAS_PER_TX_TON,
+            requestedGasTon,
             shouldWait
           );
+
+          const status: RelayResponseSuccess['status'] = broadcastResult.simulated
+            ? 'simulated'
+            : broadcastResult.confirmed
+            ? 'confirmed'
+            : 'pending';
 
           return res.status(200).json({
             success: true,
             txHash: broadcastResult.txHash,
             logicalTime: broadcastResult.logicalTime,
             confirmed: broadcastResult.confirmed,
+            status,
             userWalletAddress,
             relayedAt: Math.floor(Date.now() / 1000),
             seqno: parsedPayload.seqno,
             validUntil: parsedPayload.validUntil,
             gasSponsoredTon: broadcastResult.gasSponsoredTon,
+            gasRequestedTon: requestedGasTon.toFixed(4),
           } satisfies RelayResponseSuccess);
         } catch (err: any) {
           await ReplayGuard.releaseLock(userWalletAddress, parsedPayload.seqno);
