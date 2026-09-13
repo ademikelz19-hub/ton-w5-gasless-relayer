@@ -4,7 +4,7 @@
 [![TON](https://img.shields.io/badge/TON-Wallet--V5R1-0088cc.svg)](https://docs.ton.org)
 [![Networks](https://img.shields.io/badge/Networks-Mainnet%20%7C%20Testnet-green.svg)](https://docs.ton.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/Tests-16%20Passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-26%20Passing-brightgreen.svg)]()
 
 An enterprise-grade, open-source, non-custodial **Gasless Relayer Engine** and **Telegram Mini App SDK** for The Open Network (TON). 
 
@@ -82,7 +82,7 @@ This repository provides the battle-tested off-chain infrastructure:
                                            +-----------------------------+
 ```
 
-See [ARCHITECTURE.md](file:///c:/Users/USER/Downloads/ton%20grant/ARCHITECTURE.md) for detailed TVM cell structures, opcode specifications, and security threat modeling.
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed TVM cell structures, opcode specifications, and security threat modeling.
 
 ---
 
@@ -120,7 +120,7 @@ TON_ENDPOINT=https://testnet.toncenter.com/api/v2/jsonRPC
 RELAYER_MNEMONIC="word1 word2 ... word24"
 
 # Security & Gas Limits
-MAX_GAS_PER_TX_TON=0.05
+MAX_GAS_PER_TX_TON=0.08
 MIN_RELAYER_BALANCE_TON=0.5
 DAILY_TREASURY_LIMIT_TON=10.0
 
@@ -158,7 +158,7 @@ npm run simulate
 
 ## 🧪 Automated Testing
 
-Run the full automated test suite (16 tests across all security and cryptographic layers):
+Run the full automated test suite (26 tests across all security, gas economics, and cryptographic layers):
 
 ```bash
 npm run test
@@ -169,6 +169,8 @@ Test coverage includes:
 - **`verifier.test.ts`**: Tests Ed25519 cryptographic signatures, tampered payload rejection, expiration timestamps, dynamic non-zero subwallets, and fail-closed RPC outage behavior.
 - **`security.test.ts`**: Tests wallet-level rate limiters, ReplayGuard nonce locks, GasGuard parameter boundaries, and TreasuryGuard daily spend caps.
 - **`sdk.test.ts`**: Tests TEP-74 Jetton message building, Mainnet/Testnet address derivation, Jetton fee recovery action generation, and deterministic roundtrip HTTP submission.
+- **`gas-math.test.ts`**: Validates gas estimation and multi-action fee sponsorship requirements.
+- **`fee-enforcement.test.ts`**: Tests server-side `FEE_MODE=jetton_fee` validation, fee recipient matching, and minimum fee threshold enforcement.
 
 ---
 
