@@ -15,6 +15,29 @@ import { Address } from '@ton/core';
 // Pre-configured Relayer test wallet
 const RELAYER_MNEMONIC = "library aspect usage equip dinner cancel ten joke wasp prosper raven way reason snow group happy verify cloth under head abuse sand grace fringe";
 
+async function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function retryTonCall<T>(fn: () => Promise<T>, retries = 5, delayMs = 2000): Promise<T> {
+  let lastErr: any;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      if (err?.response?.status === 429 || err?.message?.includes('429')) {
+        console.log(`⏳ Public RPC rate limit... waiting ${delayMs / 1000}s to retry.`);
+        await sleep(delayMs);
+        delayMs += 1000;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 async function main() {
   console.log('='.repeat(70));
   console.log('🔍 TON REAL TESTNET LIVE PROOF');
@@ -35,7 +58,7 @@ async function main() {
   console.log(`\n[STEP 1] Checking Relayer Hot Wallet on live TON Testnet...`);
   console.log(`📍 Relayer Address: ${relayerAddress}`);
 
-  const relayerBalanceNano = await client.getBalance(relayerWallet.address);
+  const relayerBalanceNano = await retryTonCall(() => client.getBalance(relayerWallet.address));
   const relayerBalanceTon = fromNano(relayerBalanceNano);
   console.log(`💰 Relayer Live Balance: ${relayerBalanceTon} TON`);
 
@@ -52,6 +75,8 @@ async function main() {
     return;
   }
 
+  await sleep(1500);
+
   // 2. Generate a Brand New User Wallet with ZERO TON
   console.log(`\n[STEP 2] Creating a brand new User W5 Wallet...`);
   const userMnemonic = await mnemonicNew(24);
@@ -66,8 +91,10 @@ async function main() {
   const userAddress = userWallet.address.toString({ testOnly: true });
 
   console.log(`👤 New User Address: ${userAddress}`);
-  const userBalanceNano = await client.getBalance(userWallet.address);
+  const userBalanceNano = await retryTonCall(() => client.getBalance(userWallet.address));
   console.log(`🛑 User Live Balance on Blockchain: ${fromNano(userBalanceNano)} TON (LITERALLY ZERO!)`);
+
+  await sleep(1500);
 
   // 3. User signs a transfer
   console.log(`\n[STEP 3] User signs a transfer with 0 TON in their account...`);
@@ -95,7 +122,7 @@ async function main() {
   // 4. Relayer sponsors the gas and submits to live blockchain
   console.log(`\n[STEP 4] Relayer takes the user payload, attaches its own gas, and broadcasts...`);
   const contract = client.open(relayerWallet);
-  const seqno = await contract.getSeqno();
+  const seqno = await retryTonCall(() => contract.getSeqno());
 
   const internalMsg = internal({
     to: userWallet.address,
@@ -112,7 +139,7 @@ async function main() {
   });
 
   console.log(`📡 Submitting transaction to TON Testnet nodes...`);
-  await client.sendExternalMessage(relayerWallet, relayerTransfer);
+  await retryTonCall(() => client.sendExternalMessage(relayerWallet, relayerTransfer));
   const txHash = relayerTransfer.hash().toString('hex');
 
   console.log('\n' + '='.repeat(70));
