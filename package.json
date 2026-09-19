@@ -10,7 +10,8 @@
     "dev": "tsx watch src/index.ts",
     "test": "tsx --test test/**/*.test.ts",
     "simulate": "tsx examples/testnet-simulate.ts",
-    "demo": "tsx examples/telegram-mini-app-demo.ts"
+    "demo": "tsx examples/telegram-mini-app-demo.ts",
+    "proof": "tsx scripts/verify-real-testnet.ts"
   },
   "keywords": [
     "ton",
