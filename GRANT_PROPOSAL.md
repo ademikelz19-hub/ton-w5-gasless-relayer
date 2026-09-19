@@ -5,7 +5,8 @@
 **Target Tier:** Contenders ($30,000 – $50,000) with Champion Scalability Pathway  
 **Open Source License:** MIT  
 **GitHub Repository:** [https://github.com/ademikelz19-hub/ton-w5-gasless-relayer](https://github.com/ademikelz19-hub/ton-w5-gasless-relayer)  
-**Live On-Chain Testnet Verification:** [https://testnet.tonviewer.com/transaction/b1b0b6066433bd9b647da6aa6a8e3851b3a0078ab1267d1e73ea341d6582203f](https://testnet.tonviewer.com/transaction/b1b0b6066433bd9b647da6aa6a8e3851b3a0078ab1267d1e73ea341d6582203f)  
+**Live On-Chain Testnet Verification:** [https://testnet.tonviewer.com/transaction/4532d1b38012f1f4e389d4085df6db319ebec0327e61797448e74eaf27c02264](https://testnet.tonviewer.com/transaction/4532d1b38012f1f4e389d4085df6db319ebec0327e61797448e74eaf27c02264)  
+**Relayer Live Account:** [https://testnet.tonviewer.com/kQCQ1vEg5-YsrxpJy9Abf6Iw_uN5PqGQoz6_BtjRiAefX-3k](https://testnet.tonviewer.com/kQCQ1vEg5-YsrxpJy9Abf6Iw_uN5PqGQoz6_BtjRiAefX-3k)  
 
 ---
 
