@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
+import path from 'path';
 import { Address } from '@ton/core';
 import { config } from './config.js';
 import { W5_OPCODES, getNetworkGlobalId } from './engine/w5-spec.js';
@@ -37,6 +38,7 @@ export function createRelayerServer(broadcaster?: RelayBroadcaster) {
   // Base Middlewares
   app.use(cors());
   app.use(express.json({ limit: '64kb' }));
+  app.use(express.static(path.resolve(process.cwd(), 'public')));
   app.use(ipRateLimiter);
   app.use(apiKeyAuthMiddleware);
 
